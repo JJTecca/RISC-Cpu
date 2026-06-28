@@ -7,4 +7,4 @@ it('loads a program and reports the base address as PC', function () {
     ])
         ->assertOk()
         ->assertJsonPath('cpu.pc', 256);
-});
+})->group('simulator'); // belonging to simulator suite
