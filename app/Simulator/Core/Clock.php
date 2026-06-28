@@ -91,23 +91,56 @@ class Clock
         $state->pipeline->mem = $latch;
     }
 
-    private function operandFetch(CpuState $state): void
+    private function tryForward(int $regIndex, CpuState $state): ?int
+    {
+        $exLatch = $state->pipeline->ex;
+        if ($exLatch !== null && $exLatch->result !== null
+            && $exLatch->instruction->dest === $regIndex
+            && $this->writesRegister($exLatch->instruction)) {
+            return $exLatch->result;
+        }
+
+        $memLatch = $state->pipeline->mem;
+        if ($memLatch !== null && $memLatch->result !== null
+            && $memLatch->instruction->dest === $regIndex
+            && $this->writesRegister($memLatch->instruction)) {
+            return $memLatch->result;
+        }
+
+        return null;
+    }
+
+    private function operandFetch(CpuState $state)
     {
         $latch = $state->pipeline->of;
-        $state->pipeline->of = null;
-
-        if ($latch === null) {
-            return;
-        }
+        if ($latch === null) return;
 
         $instruction = $latch->instruction;
 
-        if ($instruction->src1 !== null) {
-            $latch->operand1 = $state->registers[$instruction->src1]->value;
+        $forwardedSrc1 = $instruction->src1 !== null ? $this->tryForward($instruction->src1, $state) : null;
+        $forwardedSrc2 = $instruction->src2 !== null ? $this->tryForward($instruction->src2, $state) : null;
+
+        $hazard = false;
+        if ($instruction->src1 !== null && $forwardedSrc1 === null && !$state->registers[$instruction->src1]->valid) {
+            $hazard = true;
+        }
+        if ($instruction->src2 !== null && $forwardedSrc2 === null && !$state->registers[$instruction->src2]->valid) {
+            $hazard = true;
         }
 
+        if ($hazard) {
+            $latch->stalled = true;
+            return; // leave latch in OF, freeze
+        }
+
+        $state->pipeline->of = null;
+        $latch->stalled = false;
+
+        if ($instruction->src1 !== null) {
+            $latch->operand1 = $forwardedSrc1 ?? $state->registers[$instruction->src1]->value;
+        }
         if ($instruction->src2 !== null) {
-            $latch->operand2 = $state->registers[$instruction->src2]->value;
+            $latch->operand2 = $forwardedSrc2 ?? $state->registers[$instruction->src2]->value;
         }
 
         if ($this->writesRegister($instruction) && $instruction->dest !== null) {
@@ -119,6 +152,10 @@ class Clock
 
     private function instructionFetch(CpuState $state): void
     {
+        if ($state->pipeline->of !== null && $state->pipeline->of->stalled) {
+            return; // freeze front-end
+        }
+
         $latch = $state->pipeline->if;
         $state->pipeline->if = null;
 
@@ -131,11 +168,9 @@ class Clock
 
         if ($instruction === null) {
             $state->ir = null;
-
             if ($this->pipelineDrained($state)) {
                 $state->halted = true;
             }
-
             return;
         }
 
