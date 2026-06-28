@@ -12,4 +12,5 @@ it('parses an ALU instruction into the right fields', function () {
         ->and($instruction->dest)->toBe(9)
         ->and($instruction->src1)->toBe(8)
         ->and($instruction->src2)->toBe(7);
-});
+})->group('simulator'); // belonging to simulator suite
+
