@@ -8,7 +8,6 @@ jobs:
   check-title-length:
     name: "Check PR Title Length"
     runs-on: ubuntu-latest
-    needs: check-title-format
     steps:
       - name: Validate PR title length
         uses: actions/github-script@v7
@@ -16,10 +15,9 @@ jobs:
           script: |
             const title = context.payload.pull_request.title;
             const maxLength = 30;
-
             if (title.length > maxLength) {
               core.setFailed(
-                `❌ PR title too long (${title.length} chars).\n` +
+                `❌ PR title too long (${title.length} chars). ` +
                 `Title must be at most ${maxLength} characters long.`
               );
             } else {
