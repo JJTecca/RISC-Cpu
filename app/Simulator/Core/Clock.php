@@ -2,14 +2,13 @@
 
 namespace App\Simulator\Core;
 
-use App\Simulator\CpuState;
 
 class Clock
 {
     /**
      * Create a new class instance.
      */
-    public function step(CpuState $state): CpuState
+    public function step(CpuState $state)
     {
         if ($state->halted) {
             return $state;

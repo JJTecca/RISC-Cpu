@@ -2,7 +2,6 @@
 
 namespace App\Simulator\Core;
 
-use App\Simulator\CpuState;
 
 class Assembler
 {
