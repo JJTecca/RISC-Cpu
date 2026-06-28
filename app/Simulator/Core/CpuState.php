@@ -1,12 +1,6 @@
 <?php
 
-namespace App\Simulator;
-
-use App\Simulator\Core\Instruction;
-use App\Simulator\Core\Memory;
-use App\Simulator\Core\Pipeline;
-use App\Simulator\Core\Register;
-use PSpell\Config;
+namespace App\Simulator\Core;
 
 class CpuState
 {
