@@ -28,6 +28,8 @@ class CpuState
     public ?array $dCache = null;
     public ?array $tlb = null;
     public ?array $pageTable = null;
+    public ?array $superscalar = null; // extension 1.2 engine state
+    public ?array $ooo = null; // extension 1.5 engine state
     
     public function __construct(int $registerCount = 32)
     {
@@ -69,6 +71,8 @@ class CpuState
             'dCache' => $this->dCache,
             'tlb' => $this->tlb,
             'pageTable' => $this->pageTable,
+            'superscalar' => $this->superscalar,
+            'ooo' => $this->ooo,
         ];
     }
 
@@ -97,6 +101,8 @@ class CpuState
         $state->dCache = $a['dCache'] ?? null;
         $state->tlb = $a['tlb'] ?? null;
         $state->pageTable = $a['pageTable'] ?? null;
+        $state->superscalar = $a['superscalar'] ?? null;
+        $state->ooo = $a['ooo'] ?? null;
 
         return $state;
     }
