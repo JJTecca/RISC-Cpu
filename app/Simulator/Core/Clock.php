@@ -2,13 +2,12 @@
 
 namespace App\Simulator\Core;
 
-
+// Five-stage in-order pipeline (Curs 9): IF -> OF -> EX -> MEM -> WB.
+// Stages run back-to-front each tick so a latch advances exactly one stage.
+// Keeps the grade-5 valid-bit hazards + EX/MEM->EX forwarding. R0 is always 0.
 class Clock
 {
-    /**
-     * Create a new class instance.
-     */
-    public function step(CpuState $state)
+    public function step(CpuState $state): CpuState
     {
         if ($state->halted) {
             return $state;
@@ -36,7 +35,9 @@ class Clock
 
         $instruction = $latch->instruction;
 
-        if ($this->writesRegister($instruction) && $instruction->dest !== null) {
+        if ($this->writesRegister($instruction)
+            && $instruction->dest !== null
+            && $instruction->dest !== 0) { // never write R0
             $state->registers[$instruction->dest]->value = $latch->result ?? 0;
             $state->registers[$instruction->dest]->valid = true;
         }
@@ -77,14 +78,44 @@ class Clock
 
         switch ($instruction->class) {
             case InstrClass::ALU:
-                $latch->result = $this->alu($instruction->opcode, $latch->operand1 ?? 0, $latch->operand2 ?? 0);
+                $a = $latch->operand1 ?? 0;
+                // second operand: register value (R-R-R) or immediate (R-R-I)
+                $b = $instruction->src2 !== null
+                    ? ($latch->operand2 ?? 0)
+                    : ($instruction->immediate ?? 0);
+                $latch->result = InstructionSet::computeAlu($instruction->opcode, $a, $b);
                 break;
+
             case InstrClass::LOAD:
+                $latch->memoryAddress = ($latch->operand1 ?? 0) + ($instruction->immediate ?? 0);
+                break;
+
             case InstrClass::STORE:
                 $latch->memoryAddress = ($latch->operand2 ?? 0) + ($instruction->immediate ?? 0);
                 break;
+
             case InstrClass::JMP:
-                $state->pc = $instruction->immediate ?? $state->pc;
+                if (InstructionSet::isUnconditionalJump($instruction->opcode)) {
+                    // direct = immediate; indirect/indexed = base register (+ offset)
+                    $target = $instruction->src1 !== null
+                        ? ($latch->operand1 ?? 0) + ($instruction->immediate ?? 0)
+                        : ($instruction->immediate ?? $state->pc);
+                    $taken = true;
+                } else {
+                    $taken = InstructionSet::branchTaken(
+                        $instruction->opcode,
+                        $latch->operand1 ?? 0,
+                        $latch->operand2 ?? 0,
+                    );
+                    $target = $instruction->immediate ?? $state->pc;
+                }
+
+                if ($taken) {
+                    $state->pc = $target;
+                    // squash the two instructions already fetched behind the branch
+                    $state->pipeline->of = null;
+                    $state->pipeline->if = null;
+                }
                 break;
         }
 
@@ -93,6 +124,10 @@ class Clock
 
     private function tryForward(int $regIndex, CpuState $state): ?int
     {
+        if ($regIndex === 0) {
+            return null; // R0 is always 0
+        }
+
         $exLatch = $state->pipeline->ex;
         if ($exLatch !== null && $exLatch->result !== null
             && $exLatch->instruction->dest === $regIndex
@@ -110,10 +145,12 @@ class Clock
         return null;
     }
 
-    private function operandFetch(CpuState $state)
+    private function operandFetch(CpuState $state): void
     {
         $latch = $state->pipeline->of;
-        if ($latch === null) return;
+        if ($latch === null) {
+            return;
+        }
 
         $instruction = $latch->instruction;
 
@@ -130,7 +167,7 @@ class Clock
 
         if ($hazard) {
             $latch->stalled = true;
-            return; // leave latch in OF, freeze
+            return; // freeze in OF
         }
 
         $state->pipeline->of = null;
@@ -143,7 +180,9 @@ class Clock
             $latch->operand2 = $forwardedSrc2 ?? $state->registers[$instruction->src2]->value;
         }
 
-        if ($this->writesRegister($instruction) && $instruction->dest !== null) {
+        if ($this->writesRegister($instruction)
+            && $instruction->dest !== null
+            && $instruction->dest !== 0) {
             $state->registers[$instruction->dest]->valid = false;
         }
 
@@ -153,7 +192,7 @@ class Clock
     private function instructionFetch(CpuState $state): void
     {
         if ($state->pipeline->of !== null && $state->pipeline->of->stalled) {
-            return; // freeze front-end
+            return; // freeze front-end while OF stalls
         }
 
         $latch = $state->pipeline->if;
@@ -177,18 +216,6 @@ class Clock
         $state->ir = $instruction;
         $state->pipeline->if = new StageLatch(instruction: $instruction);
         $state->pc += 4;
-    }
-
-    private function alu(string $opcode, int $a, int $b): int
-    {
-        return match ($opcode) {
-            'ADD' => $a + $b,
-            'SUB' => $a - $b,
-            'MUL' => $a * $b,
-            'AND' => $a & $b,
-            'OR' => $a | $b,
-            default => 0,
-        };
     }
 
     private function writesRegister(Instruction $instruction): bool

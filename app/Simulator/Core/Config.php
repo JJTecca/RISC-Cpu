@@ -13,6 +13,9 @@ final class Config
         public string $writePolicy = 'write-back',
         public string $replacement = 'lru',
         public bool $virtualMemory = false,
+        public int $issueWidth = 4,   // 1.2 superscalar issue width
+        public int $fetchWidth = 4,   // 1.2 superscalar fetch width
+        public string $scheduler = 'inorder', // inorder | superscalar | scoreboard | tomasulo | ooo
     ) {}
 
     public function toArray(): array
@@ -26,6 +29,9 @@ final class Config
             'writePolicy' => $this->writePolicy,
             'replacement' => $this->replacement,
             'virtualMemory' => $this->virtualMemory,
+            'issueWidth' => $this->issueWidth,
+            'fetchWidth' => $this->fetchWidth,
+            'scheduler' => $this->scheduler,
         ];
     }
 
@@ -40,6 +46,9 @@ final class Config
             writePolicy: $a['writePolicy'],
             replacement: $a['replacement'],
             virtualMemory: $a['virtualMemory'],
+            issueWidth: $a['issueWidth'] ?? 4,
+            fetchWidth: $a['fetchWidth'] ?? 4,
+            scheduler: $a['scheduler'] ?? 'inorder',
         );
     }
 }
