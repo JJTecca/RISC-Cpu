@@ -3,7 +3,7 @@ import axios from "axios";
 import {
   Box, Typography, Button, Paper, Chip,
   TextField, CircularProgress, Alert, Snackbar, Divider, Stack, Collapse,
-  ToggleButton, ToggleButtonGroup,
+  ToggleButton, ToggleButtonGroup, Switch, FormControlLabel, MenuItem,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from "@mui/material";
 import EastIcon from '@mui/icons-material/East';
@@ -75,13 +75,20 @@ interface OooState {
     log: { raw: string; IS: number | null; WB: number | null }[];
 }
 
+interface CacheState {
+    line: number; sets: number; ways: number; repl: string; wpolicy: string;
+    tag: (number | null)[][]; valid: boolean[][]; dirty: boolean[][]; ctr: number[][];
+    hits: number; misses: number; writebacks: number; wbuf: number; accesses: number;
+}
+interface MemoryState { dCache: CacheState | null; iCache: CacheState | null; }
+
 interface Register { value: number; valid: boolean; }
-interface CpuConfig { scheduler: Scheduler; superscalar: boolean; issueWidth: number; fetchWidth: number; }
+interface CpuConfig { scheduler: Scheduler; superscalar: boolean; issueWidth: number; fetchWidth: number; cache: boolean; cacheWays: number; cacheSets: number; replacement: string; writePolicy: string; }
 interface Cpu {
     clock: number; pc: number; halted: boolean; mar: number; mdr: number;
     ir: Instruction | null; registers: Register[]; pipeline: Pipeline; config: CpuConfig;
     superscalar: SuperscalarState | null; scoreboard: ScoreboardState | null;
-    tomasulo: TomasuloState | null; ooo: OooState | null;
+    tomasulo: TomasuloState | null; ooo: OooState | null; memory: MemoryState;
 }
 interface IsaEntry { opcode: string; class: InstrClass; syntax: string; effect: string; }
 
@@ -133,6 +140,70 @@ ADD R4, R0, 8
 LD  R5, 0[R0]`,
 };
 
+// Addresses 0 and 16 fall in the same set (sets=4): direct-mapped thrashes,
+// 2-way keeps both. Watch the hit/miss counters change with Ways.
+const CACHE_DEMO = `ADD R1, R0, 7
+ST 0[R0], R1
+ST 16[R0], R1
+LD R2, 0[R0]
+LD R3, 16[R0]
+LD R4, 0[R0]
+LD R5, 16[R0]`;
+
+function CacheCard({ title, cache }: { title: string; cache: CacheState }) {
+  const total = cache.hits + cache.misses;
+  const rate = total ? Math.round((cache.hits / total) * 100) : 0;
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }} flexWrap="wrap" useFlexGap>
+        <Typography variant="subtitle2" color="text.secondary">{title}</Typography>
+        <Box sx={{ flex: 1 }} />
+        <Chip size="small" color="success" variant="outlined" label={`hits ${cache.hits}`} />
+        <Chip size="small" color="warning" variant="outlined" label={`misses ${cache.misses}`} />
+        <Chip size="small" label={`${rate}% hit`} />
+        {cache.wpolicy === "write-back"
+          ? <Chip size="small" variant="outlined" label={`writebacks ${cache.writebacks}`} />
+          : <Chip size="small" variant="outlined" label={`buffered ${cache.wbuf}`} />}
+      </Stack>
+      <Box sx={{ overflowX: "auto" }}>
+        <Table size="small" sx={{ "& td, & th": { fontFamily: "monospace", textAlign: "center", whiteSpace: "nowrap" } }}>
+          <TableHead>
+            <TableRow>
+              <TableCell />
+              {Array.from({ length: cache.ways }).map((_, w) => (
+                <TableCell key={w} sx={{ fontWeight: 600 }}>way {w}</TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {Array.from({ length: cache.sets }).map((_, sIdx) => (
+              <TableRow key={sIdx}>
+                <TableCell sx={{ color: "text.secondary" }}>set {sIdx}</TableCell>
+                {Array.from({ length: cache.ways }).map((_, w) => {
+                  const valid = cache.valid?.[sIdx]?.[w];
+                  const tag = cache.tag?.[sIdx]?.[w];
+                  const dirty = cache.dirty?.[sIdx]?.[w];
+                  return (
+                    <TableCell key={w} sx={{
+                      border: "1px solid",
+                      borderColor: valid && dirty ? "warning.main" : "divider",
+                      bgcolor: valid ? "background.paper" : "grey.100",
+                      color: valid ? (dirty ? "warning.main" : "text.primary") : "text.disabled",
+                      minWidth: 64,
+                    }}>
+                      {valid ? `tag ${tag}${dirty ? " \u2022" : ""}` : "\u2014"}
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Box>
+    </Paper>
+  );
+}
+
 export default function CpuSimulation(
   { cpu: initialCpu, instructionSet = [] }: { cpu: Cpu; instructionSet?: IsaEntry[] }
 ) {
@@ -143,12 +214,17 @@ export default function CpuSimulation(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showIsa, setShowIsa] = useState(true);
+  const [cache, setCache] = useState(false);
+  const [cacheWays, setCacheWays] = useState(2);
+  const [cacheRepl, setCacheRepl] = useState("lru");
+  const [cacheWrite, setCacheWrite] = useState("write-back");
 
   const mode: Scheduler = cpu.config?.scheduler ?? "inorder";
   const isSuperscalar = mode === "superscalar";
   const isScoreboard = mode === "scoreboard";
   const isTomasulo = mode === "tomasulo";
   const isOoo = mode === "ooo";
+  const isCacheOn = !!cpu.config?.cache;
 
   const tmExec = new Set<string>();
   if (cpu.tomasulo) Object.values(cpu.tomasulo.fu).forEach((f) => f && tmExec.add(f.tag));
@@ -160,10 +236,10 @@ export default function CpuSimulation(
     finally { setLoading(false); }
   };
 
-  const load = () => handle(axios.post("/sim/load", { source, baseAddress, scheduler }));
+  const load = () => handle(axios.post("/sim/load", { source, baseAddress, scheduler, cache, cacheWays, cacheSets: 4, replacement: cacheRepl, writePolicy: cacheWrite }));
   const step = () => handle(axios.post("/sim/step"));
   const reset = () => handle(axios.post("/sim/reset"));
-  const loadDemo = () => { setSource(DEMOS[scheduler]); setBaseAddress(256); };
+  const loadDemo = () => { setSource(cache ? CACHE_DEMO : DEMOS[scheduler]); setBaseAddress(256); };
 
   const wide = isScoreboard || isTomasulo || isOoo;
 
@@ -176,6 +252,7 @@ export default function CpuSimulation(
         <Chip label={`PC ${cpu.pc}`} size="small" variant="outlined" />
         <Chip label={cpu.halted ? "halted" : "running"} size="small" color={cpu.halted ? "default" : "success"} />
         {mode !== "inorder" && <Chip label={mode} size="small" color="primary" />}
+        {isCacheOn && <Chip label="cache" size="small" color="secondary" />}
         {loading && <CircularProgress size={18} />}
       </Stack>
 
@@ -216,6 +293,32 @@ export default function CpuSimulation(
         <Typography variant="caption" color="text.disabled" sx={{ display: "block", mt: 1 }}>
           Pick a scheduler before Load. It applies on the next Load.
         </Typography>
+
+        <Divider sx={{ my: 1.5 }} />
+        <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+          <FormControlLabel
+            control={<Switch checked={cache} onChange={(e) => setCache(e.target.checked)} />}
+            label="Cache"
+          />
+          <TextField select size="small" label="Ways" value={cacheWays} disabled={!cache}
+            onChange={(e) => setCacheWays(Number(e.target.value))} sx={{ width: 110 }}>
+            <MenuItem value={1}>1 (direct)</MenuItem>
+            <MenuItem value={2}>2-way</MenuItem>
+            <MenuItem value={4}>4-way</MenuItem>
+          </TextField>
+          <TextField select size="small" label="Replace" value={cacheRepl} disabled={!cache}
+            onChange={(e) => setCacheRepl(e.target.value)} sx={{ width: 130 }}>
+            <MenuItem value="lru">LRU</MenuItem>
+            <MenuItem value="random">Random</MenuItem>
+            <MenuItem value="aprox">Approx LRU</MenuItem>
+          </TextField>
+          <TextField select size="small" label="Write" value={cacheWrite} disabled={!cache}
+            onChange={(e) => setCacheWrite(e.target.value)} sx={{ width: 150 }}>
+            <MenuItem value="write-back">Write-back</MenuItem>
+            <MenuItem value="write-through">Write-through</MenuItem>
+          </TextField>
+          <Typography variant="caption" color="text.disabled">4 sets, 1 word/line.</Typography>
+        </Stack>
       </Paper>
 
       {/* ---------- main grid ---------- */}
@@ -443,6 +546,14 @@ export default function CpuSimulation(
           </TableContainer>
         </Paper>
       </Box>
+
+      {/* ---------- cache visualization ---------- */}
+      {isCacheOn && (cpu.memory?.dCache || cpu.memory?.iCache) && (
+        <Box sx={{ mt: 3, display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
+          {cpu.memory?.dCache && <CacheCard title="Data Cache" cache={cpu.memory.dCache} />}
+          {cpu.memory?.iCache && <CacheCard title="Instruction Cache" cache={cpu.memory.iCache} />}
+        </Box>
+      )}
 
       {/* ---------- scoreboard / tomasulo instruction status ---------- */}
       {(isScoreboard || isTomasulo) && (
