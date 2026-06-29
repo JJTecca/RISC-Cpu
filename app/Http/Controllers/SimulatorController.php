@@ -5,18 +5,19 @@ namespace App\Http\Controllers;
 use App\Simulator\Core\Assembler;
 use App\Simulator\Core\Clock;
 use App\Simulator\Core\CpuState;
+use App\Simulator\Core\InstructionSet;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
 class SimulatorController extends Controller
 {
-    //
     public function index()
     {
         $cpu = session('cpu') ?? CpuState::fresh()->toArray();
 
         return Inertia::render('CpuSimulation/index', [
             'cpu' => $cpu,
+            'instructionSet' => InstructionSet::describe(),
         ]);
     }
 

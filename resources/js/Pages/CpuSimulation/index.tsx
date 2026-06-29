@@ -2,14 +2,10 @@ import { useState } from "react";
 import axios from "axios";
 import {
   Box, Typography, Button, Paper, Chip,
-  TextField, CircularProgress, Alert, Snackbar, Divider, Stack,
+  TextField, CircularProgress, Alert, Snackbar, Divider, Stack, Collapse,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from "@mui/material";
 import EastIcon from '@mui/icons-material/East';
-// import { Cpu } from "../../../../app/Simulator/Core/CpuState";
-// import { Pipeline } from "../../../../app/Simulator/Core/Pipeline";
-// import { StageLatch } from "../../../../app/Simulator/Core/StageLatch";
-// import { Register } from "../../../../app/Simulator/Core/Register";
 
 const STAGES: { key: keyof Pipeline; label: string }[] = [
   { key: "if", label: "IF" },
@@ -65,14 +61,44 @@ interface Cpu {
     pipeline: Pipeline;
 }
 
+interface IsaEntry {
+    opcode: string;
+    class: InstrClass;
+    syntax: string;
+    effect: string;
+}
+
 const toHex = (n: number) => "0x" + n.toString(16).toUpperCase().padStart(2, "0");
 
-export default function CpuSimulation({ cpu: initialCpu }: { cpu: Cpu }) {
+// Groups shown in the instruction-set panel, in this order.
+const ISA_GROUPS: { key: InstrClass; label: string }[] = [
+  { key: "ALU", label: "ALU" },
+  { key: "LOAD", label: "Load" },
+  { key: "STORE", label: "Store" },
+  { key: "JMP", label: "Control (branch / jump)" },
+];
+
+const DEMO_PROGRAM = `ADD R1, R0, 5
+ADD R2, R0, R0
+loop:   ADD R2, R2, R1
+SUB R1, R1, 1
+BNE R1, R0, loop
+ST  0[R0], R2
+LD  R3, 0[R0]
+MUL R5, R2, R2
+JMP done
+ADD R6, R0, 999
+done:   ADD R7, R0, 42`;
+
+export default function CpuSimulation(
+  { cpu: initialCpu, instructionSet = [] }: { cpu: Cpu; instructionSet?: IsaEntry[] }
+) {
   const [cpu, setCpu] = useState<Cpu>(initialCpu);
   const [source, setSource] = useState("ADD R9,R8,R7");
   const [baseAddress, setBaseAddress] = useState(256);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showIsa, setShowIsa] = useState(true);
 
   const handle = async (request: Promise<{ data: { cpu: Cpu } }>) => {
     setLoading(true);
@@ -90,6 +116,7 @@ export default function CpuSimulation({ cpu: initialCpu }: { cpu: Cpu }) {
   const load = () => handle(axios.post("/sim/load", { source, baseAddress }));
   const step = () => handle(axios.post("/sim/step"));
   const reset = () => handle(axios.post("/sim/reset"));
+  const loadDemo = () => { setSource(DEMO_PROGRAM); setBaseAddress(256); };
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "grey.50", p: 3 }}>
@@ -129,7 +156,7 @@ export default function CpuSimulation({ cpu: initialCpu }: { cpu: Cpu }) {
           />
         </Stack>
 
-        <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+        <Stack direction="row" spacing={1} sx={{ mt: 2 }} flexWrap="wrap">
           <Button variant="contained" color="inherit" onClick={load} disabled={loading}>
             Load
           </Button>
@@ -138,6 +165,13 @@ export default function CpuSimulation({ cpu: initialCpu }: { cpu: Cpu }) {
           </Button>
           <Button variant="outlined" color="inherit" onClick={reset} disabled={loading}>
             Reset
+          </Button>
+          <Box sx={{ flex: 1 }} />
+          <Button variant="text" onClick={loadDemo} disabled={loading}>
+            Demo
+          </Button>
+          <Button variant="text" onClick={() => setShowIsa((v) => !v)}>
+            {showIsa ? "Hide instruction set" : "Instruction set"}
           </Button>
         </Stack>
       </Paper>
@@ -234,6 +268,51 @@ export default function CpuSimulation({ cpu: initialCpu }: { cpu: Cpu }) {
           </TableContainer>
         </Paper>
       </Box>
+
+      {/* ---------- instruction set reference ---------- */}
+      <Collapse in={showIsa}>
+        <Paper variant="outlined" sx={{ p: 2, mt: 3 }}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
+            Instruction Set
+          </Typography>
+          <Box
+            sx={{
+              display: "grid",
+              gap: 2,
+              gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+            }}
+          >
+            {ISA_GROUPS.map((group) => {
+              const rows = instructionSet.filter((e) => e.class === group.key);
+              if (rows.length === 0) return null;
+              return (
+                <Box key={group.key}>
+                  <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                    {group.label}
+                  </Typography>
+                  <Table
+                    size="small"
+                    sx={{ mt: 0.5, "& td": { fontFamily: "monospace", borderBottom: "none", py: 0.25 } }}
+                  >
+                    <TableBody>
+                      {rows.map((e) => (
+                        <TableRow key={e.opcode}>
+                          <TableCell sx={{ whiteSpace: "nowrap" }}>{e.syntax}</TableCell>
+                          <TableCell sx={{ color: "text.disabled" }}>{e.effect}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </Box>
+              );
+            })}
+          </Box>
+          <Typography variant="caption" color="text.disabled" sx={{ display: "block", mt: 1.5 }}>
+            R0 is hardwired to 0. Third ALU operand may be a register or a constant.
+            Targets can be labels (e.g. loop:) or addresses.
+          </Typography>
+        </Paper>
+      </Collapse>
 
       {/* ---------- error toast ---------- */}
       <Snackbar
