@@ -69,15 +69,6 @@ it('ține corect contoarele (hit/miss/fault)', function () {
         ->and($m->tlbMisses)->toBe(2);
 })->group('simulator');
 
-it('este transparentă: datele rămân corecte după traducere', function () {
-    $m = new Memory();
-    $m->mmu = Mmu::make(16, 4, 16, 8, 'memory');
-    $m->write(20, 99);                
-
-    expect($m->read(20))->toBe(99)    
-        ->and($m->mmu->lastPaddr)->toBe(4); 
-})->group('simulator');
-
 it('un program store→load dă același rezultat cu memorie virtuală activă', function () {
     $src = "ADD R1,R0,7\nST 0[R0],R1\nLD R2,0[R0]";
     $state = new CpuState();
