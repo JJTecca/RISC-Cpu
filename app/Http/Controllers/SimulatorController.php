@@ -27,6 +27,29 @@ class SimulatorController extends Controller
         ]);
     }
 
+    private function configureVirtualMemory(CpuState $cpu, Request $request): void
+    {
+        $cfg = $cpu->config;
+        $cfg->virtualMemory = $request->boolean('virtualMemory');
+        $cfg->pageSize = (int) $request->input('pageSize', $cfg->pageSize);
+        $cfg->tlbEntries = (int) $request->input('tlbEntries', $cfg->tlbEntries);
+        $cfg->virtualPages = (int) $request->input('virtualPages', $cfg->virtualPages);
+        $cfg->physicalFrames = (int) $request->input('physicalFrames', $cfg->physicalFrames);
+        $cfg->pageTableLocation = $request->input('pageTableLocation', $cfg->pageTableLocation);
+
+        if (! $cfg->virtualMemory) {
+            return;
+        }
+
+        $cpu->memory->mmu = Mmu::make(
+            $cfg->pageSize,
+            $cfg->tlbEntries,
+            $cfg->virtualPages,
+            $cfg->physicalFrames,
+            $cfg->pageTableLocation,
+        );
+    }
+
     public function load(Request $request, Assembler $assembler)
     {
         $validated = $request->validate([
@@ -94,29 +117,6 @@ class SimulatorController extends Controller
         }
         $cpu->memory->dCache = Cache::make($cfg->cacheLineSize, $cfg->cacheSets, $cfg->cacheWays, $cfg->replacement, $cfg->writePolicy, $cfg->writeAllocate, $cfg->scanInterval, true);
         $cpu->memory->iCache = Cache::make($cfg->cacheLineSize, $cfg->cacheSets, $cfg->cacheWays, $cfg->replacement, $cfg->writePolicy, $cfg->writeAllocate, $cfg->scanInterval, false);
-    }
-
-    private function configureMmu(CpuState $cpu, Request $request): void
-    {
-        $cfg = $cpu->config;
-        $cfg->virtualMemory = $request->boolean('virtualMemory');
-        $cfg->pageSize = (int) $request->input('pageSize', $cfg->pageSize);
-        $cfg->tlbEntries = (int) $request->input('tlbEntries', $cfg->tlbEntries);
-        $cfg->virtualPages = (int) $request->input('virtualPages', $cfg->virtualPages);
-        $cfg->physicalFrames = (int) $request->input('physicalFrames', $cfg->physicalFrames);
-        $cfg->pageTableLocation = $request->input('pageTableLocation', $cfg->pageTableLocation);
-
-        if (! $cfg->virtualMemory) {
-            return;
-        }
-
-        $cpu->memory->mmu = Mmu::make(
-            $cfg->pageSize,
-            $cfg->tlbEntries,
-            $cfg->virtualPages,
-            $cfg->physicalFrames,
-            $cfg->pageTableLocation,
-        );
     }
 
     private function engineFor(CpuState $cpu): Clock|SuperscalarClock|ScoreboardClock|TomasuloClock|OutOfOrderClock
