@@ -80,10 +80,22 @@ interface CacheState {
     tag: (number | null)[][]; valid: boolean[][]; dirty: boolean[][]; ctr: number[][];
     hits: number; misses: number; writebacks: number; wbuf: number; accesses: number;
 }
-interface MemoryState { dCache: CacheState | null; iCache: CacheState | null; }
+interface MemoryState { dCache: CacheState | null; iCache: CacheState | null; mmu: MmuState | null; }
 
+interface MmuEntry { vpn: number | null; frame: number | null; valid: boolean; rec: number; }
+interface MmuPte { present: boolean; frame: number | null; }
+interface MmuFrame { vpn: number | null; rec: number; }
+interface MmuState {
+    pageSize: number; tlbEntries: number; virtualPages: number; physicalFrames: number; ptLoc: string;
+    tlb: MmuEntry[]; pageTable: MmuPte[]; frames: MmuFrame[];
+    accesses: number; tlbHits: number; tlbMisses: number; pageFaults: number;
+    tlbEvictions: number; pageEvictions: number;
+    lastVaddr: number | null; lastVpn: number | null; lastOffset: number | null;
+    lastFrame: number | null; lastPaddr: number | null; lastCase: number | null; lastLabel: string | null;
+    labels: Record<string, string>;
+}
 interface Register { value: number; valid: boolean; }
-interface CpuConfig { scheduler: Scheduler; superscalar: boolean; issueWidth: number; fetchWidth: number; cache: boolean; cacheWays: number; cacheSets: number; replacement: string; writePolicy: string; }
+interface CpuConfig { scheduler: Scheduler; superscalar: boolean; issueWidth: number; fetchWidth: number; cache: boolean; cacheWays: number; cacheSets: number; replacement: string; writePolicy: string; virtualMemory?: boolean; pageSize?: number; tlbEntries?: number; virtualPages?: number; physicalFrames?: number; pageTableLocation?: string; }
 interface Cpu {
     clock: number; pc: number; halted: boolean; mar: number; mdr: number;
     ir: Instruction | null; registers: Register[]; pipeline: Pipeline; config: CpuConfig;
@@ -150,6 +162,15 @@ LD R3, 16[R0]
 LD R4, 0[R0]
 LD R5, 16[R0]`;
 
+const VM_DEMO = `ADD R1, R0, 7
+ST 0[R0], R1
+LD R2, 0[R0]
+ST 16[R0], R1
+ST 32[R0], R1
+LD R3, 0[R0]
+ST 48[R0], R1
+ST 64[R0], R1`;
+
 function CacheCard({ title, cache }: { title: string; cache: CacheState }) {
   const total = cache.hits + cache.misses;
   const rate = total ? Math.round((cache.hits / total) * 100) : 0;
@@ -204,6 +225,91 @@ function CacheCard({ title, cache }: { title: string; cache: CacheState }) {
   );
 }
 
+function MmuCard({ mmu }: { mmu: MmuState }) {
+  const caseColor = (n: number | null) =>
+    (n === 1 ? "success" : n === 6 ? "error" : n === 2 || n === 3 ? "info" : "warning") as
+      "success" | "error" | "info" | "warning";
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }} flexWrap="wrap" useFlexGap>
+        <Typography variant="subtitle2" color="text.secondary">
+          Memorie virtuală — TLB + tabelă de pagini ({mmu.ptLoc === "cache" ? "tabelă în cache" : "tabelă în memorie"})
+        </Typography>
+        <Box sx={{ flex: 1 }} />
+        <Chip size="small" color="success" variant="outlined" label={`TLB hits ${mmu.tlbHits}`} />
+        <Chip size="small" color="warning" variant="outlined" label={`TLB misses ${mmu.tlbMisses}`} />
+        <Chip size="small" color="error" variant="outlined" label={`page faults ${mmu.pageFaults}`} />
+      </Stack>
+
+      {mmu.lastCase ? (
+        <Alert severity={caseColor(mmu.lastCase)} icon={false} sx={{ mb: 2 }}>
+          <b>Caz {mmu.lastCase}:</b> {mmu.lastLabel}<br />
+          <span style={{ fontFamily: "monospace" }}>
+            v{mmu.lastVaddr} → p{mmu.lastPaddr} &nbsp; (VPN {mmu.lastVpn}, offset {mmu.lastOffset}, cadru {mmu.lastFrame})
+          </span>
+        </Alert>
+      ) : (
+        <Typography variant="caption" color="text.disabled">Niciun acces încă. Apasă Next ca să vezi traducerea.</Typography>
+      )}
+
+      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" } }}>
+        <Box>
+          <Typography variant="caption" color="text.secondary">TLB</Typography>
+          <Table size="small" sx={{ "& td, & th": { fontFamily: "monospace", textAlign: "center", py: 0.2 } }}>
+            <TableHead><TableRow><TableCell>#</TableCell><TableCell>VPN</TableCell><TableCell>cadru</TableCell></TableRow></TableHead>
+            <TableBody>
+              {mmu.tlb.map((e, i) => (
+                <TableRow key={i} sx={{ bgcolor: e.valid && e.vpn === mmu.lastVpn ? "success.light" : undefined }}>
+                  <TableCell>{i}</TableCell>
+                  <TableCell>{e.valid ? e.vpn : "\u2014"}</TableCell>
+                  <TableCell>{e.valid ? e.frame : "\u2014"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
+        <Box>
+          <Typography variant="caption" color="text.secondary">Tabelă de pagini (prezente)</Typography>
+          <Table size="small" sx={{ "& td, & th": { fontFamily: "monospace", textAlign: "center", py: 0.2 } }}>
+            <TableHead><TableRow><TableCell>VPN</TableCell><TableCell>cadru</TableCell></TableRow></TableHead>
+            <TableBody>
+              {mmu.pageTable.map((e, v) => e.present ? (
+                <TableRow key={v} sx={{ bgcolor: v === mmu.lastVpn ? "info.light" : undefined }}>
+                  <TableCell>{v}</TableCell><TableCell>{e.frame}</TableCell>
+                </TableRow>
+              ) : null)}
+            </TableBody>
+          </Table>
+        </Box>
+        <Box>
+          <Typography variant="caption" color="text.secondary">Cadre fizice</Typography>
+          <Table size="small" sx={{ "& td, & th": { fontFamily: "monospace", textAlign: "center", py: 0.2 } }}>
+            <TableHead><TableRow><TableCell>cadru</TableCell><TableCell>VPN</TableCell></TableRow></TableHead>
+            <TableBody>
+              {mmu.frames.map((f, i) => (
+                <TableRow key={i} sx={{ bgcolor: i === mmu.lastFrame ? "warning.light" : undefined }}>
+                  <TableCell>{i}</TableCell><TableCell>{f.vpn ?? "\u2014"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
+      </Box>
+
+      <Box sx={{ mt: 2 }}>
+        <Typography variant="caption" color="text.secondary">Cele 6 cazuri (cel curent e evidențiat)</Typography>
+        <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.5} sx={{ mt: 0.5 }}>
+          {Object.entries(mmu.labels || {}).map(([n, lbl]) => (
+            <Chip key={n} size="small" label={`${n}. ${lbl}`}
+              color={Number(n) === mmu.lastCase ? caseColor(mmu.lastCase) : "default"}
+              variant={Number(n) === mmu.lastCase ? "filled" : "outlined"} />
+          ))}
+        </Stack>
+      </Box>
+    </Paper>
+  );
+}
+
 export default function CpuSimulation(
   { cpu: initialCpu, instructionSet = [] }: { cpu: Cpu; instructionSet?: IsaEntry[] }
 ) {
@@ -218,6 +324,11 @@ export default function CpuSimulation(
   const [cacheWays, setCacheWays] = useState(2);
   const [cacheRepl, setCacheRepl] = useState("lru");
   const [cacheWrite, setCacheWrite] = useState("write-back");
+  const [vm, setVm] = useState(false);
+  const [vmPageSize, setVmPageSize] = useState(16);
+  const [vmTlb, setVmTlb] = useState(2);
+  const [vmFrames, setVmFrames] = useState(4);
+  const [vmPtLoc, setVmPtLoc] = useState("memory");
 
   const mode: Scheduler = cpu.config?.scheduler ?? "inorder";
   const isSuperscalar = mode === "superscalar";
@@ -225,6 +336,7 @@ export default function CpuSimulation(
   const isTomasulo = mode === "tomasulo";
   const isOoo = mode === "ooo";
   const isCacheOn = !!cpu.config?.cache;
+  const isVmOn = !!cpu.config?.virtualMemory;
 
   const tmExec = new Set<string>();
   if (cpu.tomasulo) Object.values(cpu.tomasulo.fu).forEach((f) => f && tmExec.add(f.tag));
@@ -236,10 +348,18 @@ export default function CpuSimulation(
     finally { setLoading(false); }
   };
 
-  const load = () => handle(axios.post("/sim/load", { source, baseAddress, scheduler, cache, cacheWays, cacheSets: 4, replacement: cacheRepl, writePolicy: cacheWrite }));
+const load = () => handle(axios.post("/sim/load", {
+    source, baseAddress, scheduler,
+    cache, cacheWays, cacheSets: 4, replacement: cacheRepl, writePolicy: cacheWrite,
+    virtualMemory: vm, pageSize: vmPageSize, tlbEntries: vmTlb, physicalFrames: vmFrames,
+    virtualPages: 16, pageTableLocation: vmPtLoc,
+  }));
+  const loadDemo = () => {
+    if (vm) { setSource(VM_DEMO); setBaseAddress(256); return; }
+    setSource(cache ? CACHE_DEMO : DEMOS[scheduler]); setBaseAddress(256);
+  };
   const step = () => handle(axios.post("/sim/step"));
   const reset = () => handle(axios.post("/sim/reset"));
-  const loadDemo = () => { setSource(cache ? CACHE_DEMO : DEMOS[scheduler]); setBaseAddress(256); };
 
   const wide = isScoreboard || isTomasulo || isOoo;
 
@@ -253,6 +373,7 @@ export default function CpuSimulation(
         <Chip label={cpu.halted ? "halted" : "running"} size="small" color={cpu.halted ? "default" : "success"} />
         {mode !== "inorder" && <Chip label={mode} size="small" color="primary" />}
         {isCacheOn && <Chip label="cache" size="small" color="secondary" />}
+        {isVmOn && <Chip label="virtual mem" size="small" color="info" />}
         {loading && <CircularProgress size={18} />}
       </Stack>
 
@@ -318,6 +439,31 @@ export default function CpuSimulation(
             <MenuItem value="write-through">Write-through</MenuItem>
           </TextField>
           <Typography variant="caption" color="text.disabled">4 sets, 1 word/line.</Typography>
+        </Stack>
+
+        <Divider sx={{ my: 1.5 }} />
+        <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+          <FormControlLabel
+            control={<Switch checked={vm} onChange={(e) => setVm(e.target.checked)} />}
+            label="Memorie virtuală"
+          />
+          <TextField select size="small" label="Page size" value={vmPageSize} disabled={!vm}
+            onChange={(e) => setVmPageSize(Number(e.target.value))} sx={{ width: 120 }}>
+            <MenuItem value={8}>8</MenuItem><MenuItem value={16}>16</MenuItem><MenuItem value={32}>32</MenuItem>
+          </TextField>
+          <TextField select size="small" label="TLB" value={vmTlb} disabled={!vm}
+            onChange={(e) => setVmTlb(Number(e.target.value))} sx={{ width: 100 }}>
+            <MenuItem value={2}>2</MenuItem><MenuItem value={4}>4</MenuItem><MenuItem value={8}>8</MenuItem>
+          </TextField>
+          <TextField select size="small" label="Cadre fizice" value={vmFrames} disabled={!vm}
+            onChange={(e) => setVmFrames(Number(e.target.value))} sx={{ width: 130 }}>
+            <MenuItem value={2}>2</MenuItem><MenuItem value={4}>4</MenuItem><MenuItem value={8}>8</MenuItem>
+          </TextField>
+          <TextField select size="small" label="Tabelă în" value={vmPtLoc} disabled={!vm}
+            onChange={(e) => setVmPtLoc(e.target.value)} sx={{ width: 140 }}>
+            <MenuItem value="memory">memorie</MenuItem><MenuItem value="cache">cache</MenuItem>
+          </TextField>
+          <Typography variant="caption" color="text.disabled">16 pagini virtuale. „Demo" încarcă programul care declanșează cazurile.</Typography>
         </Stack>
       </Paper>
 
@@ -552,6 +698,12 @@ export default function CpuSimulation(
         <Box sx={{ mt: 3, display: "grid", gap: 3, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
           {cpu.memory?.dCache && <CacheCard title="Data Cache" cache={cpu.memory.dCache} />}
           {cpu.memory?.iCache && <CacheCard title="Instruction Cache" cache={cpu.memory.iCache} />}
+        </Box>
+      )}
+      {/* ---------- virtual memory visualization ---------- */}
+      {isVmOn && cpu.memory?.mmu && (
+        <Box sx={{ mt: 3 }}>
+          <MmuCard mmu={cpu.memory.mmu} />
         </Box>
       )}
 

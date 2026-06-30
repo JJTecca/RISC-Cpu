@@ -14,6 +14,9 @@ final class Memory
     public ?Cache $dCache = null;
     public ?Cache $iCache = null;
 
+    // Group 3: optional MMU. When set, virtual addresses are translated (TLB + page table)
+    public ?Mmu $mmu = null;
+
     // --- raw backing access (used by the caches; bypasses them) ---
     public function rawRead(int $address): int
     {
@@ -33,11 +36,17 @@ final class Memory
     // --- public access: transparent through the caches when present ---
     public function read(int $address): int
     {
+        if ($this->mmu !== null) {
+            $paddr = $this->mmu->translate($address);
+        }
         return $this->dCache !== null ? $this->dCache->read($this, $address) : $this->rawRead($address);
     }
 
     public function write(int $address, int $value): void
     {
+        if ($this->mmu !== null) {
+            $address = $this->mmu->translate($address); 
+        }
         if ($this->dCache !== null) {
             $this->dCache->write($this, $address, $value);
         } else {
@@ -71,6 +80,7 @@ final class Memory
             'instructions' => $instructions,
             'dCache' => $this->dCache?->toArray(),
             'iCache' => $this->iCache?->toArray(),
+            'mmu' => $this->mmu?->toArray(),
         ];
     }
 
@@ -85,7 +95,7 @@ final class Memory
 
         $memory->dCache = isset($a['dCache']) && $a['dCache'] !== null ? Cache::fromArray($a['dCache']) : null;
         $memory->iCache = isset($a['iCache']) && $a['iCache'] !== null ? Cache::fromArray($a['iCache']) : null;
-
+        $memory->mmu = isset($a['mmu']) && $a['mmu'] !== null ? Mmu::fromArray($a['mmu']) : null;
         return $memory;
     }
 }
